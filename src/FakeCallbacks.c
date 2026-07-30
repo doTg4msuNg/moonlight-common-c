@@ -41,6 +41,10 @@ static void fakeClRumbleTriggers(uint16_t controllerNumber, uint16_t leftTrigger
 static void fakeClSetMotionEventState(uint16_t controllerNumber, uint8_t motionType, uint16_t reportRateHz) {}
 static void fakeClSetAdaptiveTriggers(uint16_t controllerNumber, uint8_t eventFlags, uint8_t typeLeft, uint8_t typeRight, uint8_t *left, uint8_t *right) {};
 static void fakeClSetControllerLED(uint16_t controllerNumber, uint8_t r, uint8_t g, uint8_t b) {}
+static void fakeClDynamicCursorOffer(uint8_t version, uint8_t formats, uint16_t maxWidth, uint16_t maxHeight, uint16_t flags) {}
+static void fakeClDynamicCursorShape(uint32_t serial, uint16_t width, uint16_t height, uint16_t hotspotX, uint16_t hotspotY, const uint8_t* data, uint32_t dataLength) {}
+static void fakeClDynamicCursorState(uint32_t shapeSerial, int32_t x, int32_t y, uint16_t sourceWidth, uint16_t sourceHeight, bool visible) {}
+static void fakeClDynamicCursorMode(uint8_t mode, uint32_t shapeSerial) {}
 
 static CONNECTION_LISTENER_CALLBACKS fakeClCallbacks = {
     .stageStarting = fakeClStageStarting,
@@ -56,6 +60,10 @@ static CONNECTION_LISTENER_CALLBACKS fakeClCallbacks = {
     .setMotionEventState = fakeClSetMotionEventState,
     .setControllerLED = fakeClSetControllerLED,
     .setAdaptiveTriggers = fakeClSetAdaptiveTriggers,
+    .dynamicCursorOffer = fakeClDynamicCursorOffer,
+    .dynamicCursorShape = fakeClDynamicCursorShape,
+    .dynamicCursorState = fakeClDynamicCursorState,
+    .dynamicCursorMode = fakeClDynamicCursorMode,
 };
 
 void fixupMissingCallbacks(PDECODER_RENDERER_CALLBACKS* drCallbacks, PAUDIO_RENDERER_CALLBACKS* arCallbacks,
@@ -145,6 +153,18 @@ void fixupMissingCallbacks(PDECODER_RENDERER_CALLBACKS* drCallbacks, PAUDIO_REND
         }
         if ((*clCallbacks)->setAdaptiveTriggers == NULL) {
             (*clCallbacks)->setAdaptiveTriggers = fakeClSetAdaptiveTriggers;
+        }
+        if ((*clCallbacks)->dynamicCursorOffer == NULL) {
+            (*clCallbacks)->dynamicCursorOffer = fakeClDynamicCursorOffer;
+        }
+        if ((*clCallbacks)->dynamicCursorShape == NULL) {
+            (*clCallbacks)->dynamicCursorShape = fakeClDynamicCursorShape;
+        }
+        if ((*clCallbacks)->dynamicCursorState == NULL) {
+            (*clCallbacks)->dynamicCursorState = fakeClDynamicCursorState;
+        }
+        if ((*clCallbacks)->dynamicCursorMode == NULL) {
+            (*clCallbacks)->dynamicCursorMode = fakeClDynamicCursorMode;
         }
     }
 }

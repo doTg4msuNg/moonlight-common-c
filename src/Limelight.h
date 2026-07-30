@@ -479,6 +479,14 @@ typedef void(*ConnListenerSetAdaptiveTriggers)(uint16_t controllerNumber, uint8_
 // This callback is invoked to set a controller's RGB LED (if present).
 typedef void(*ConnListenerSetControllerLED)(uint16_t controllerNumber, uint8_t r, uint8_t g, uint8_t b);
 
+typedef void(*ConnListenerDynamicCursorOffer)(uint8_t version, uint8_t formats, uint16_t maxWidth, uint16_t maxHeight, uint16_t flags);
+typedef void(*ConnListenerDynamicCursorShape)(uint32_t serial, uint16_t width, uint16_t height,
+                                              uint16_t hotspotX, uint16_t hotspotY,
+                                              const uint8_t* premultipliedBgra, uint32_t dataLength);
+typedef void(*ConnListenerDynamicCursorState)(uint32_t shapeSerial, int32_t x, int32_t y,
+                                              uint16_t sourceWidth, uint16_t sourceHeight, bool visible);
+typedef void(*ConnListenerDynamicCursorMode)(uint8_t mode, uint32_t shapeSerial);
+
 typedef struct _CONNECTION_LISTENER_CALLBACKS {
     ConnListenerStageStarting stageStarting;
     ConnListenerStageComplete stageComplete;
@@ -493,6 +501,10 @@ typedef struct _CONNECTION_LISTENER_CALLBACKS {
     ConnListenerSetMotionEventState setMotionEventState;
     ConnListenerSetControllerLED setControllerLED;
     ConnListenerSetAdaptiveTriggers setAdaptiveTriggers;
+    ConnListenerDynamicCursorOffer dynamicCursorOffer;
+    ConnListenerDynamicCursorShape dynamicCursorShape;
+    ConnListenerDynamicCursorState dynamicCursorState;
+    ConnListenerDynamicCursorMode dynamicCursorMode;
 } CONNECTION_LISTENER_CALLBACKS, *PCONNECTION_LISTENER_CALLBACKS;
 
 // Use this function to zero the connection callbacks when allocated on the stack or heap
@@ -959,6 +971,12 @@ typedef struct _SS_HDR_METADATA {
 // from the host PC's monitor and content (if available). It is only valid to call this
 // function when HDR mode is active on the host. This is a Sunshine protocol extension.
 bool LiGetHdrMetadata(PSS_HDR_METADATA metadata);
+
+// Apollo dynamic cursor extension. These calls are ignored by hosts that never
+// send a dynamic cursor offer.
+int LiSendDynamicCursorCapabilities(uint8_t version, uint8_t formats,
+                                    uint16_t maxWidth, uint16_t maxHeight, uint16_t flags);
+int LiSendDynamicCursorReady(uint32_t shapeSerial, uint8_t version);
 
 // This function requests an IDR frame from the host. Typically this is done using DR_NEED_IDR, but clients
 // processing frames asynchronously may need to reset their decoder state even after returning DR_OK for

@@ -105,6 +105,24 @@ static bool encryptedControlStream;
 static bool hdrEnabled;
 static SS_HDR_METADATA hdrMetadata;
 
+#define APOLLO_CURSOR_OFFER_PTYPE        0x3003
+#define APOLLO_CURSOR_CAPABILITIES_PTYPE 0x3004
+#define APOLLO_CURSOR_SHAPE_PTYPE        0x3005
+#define APOLLO_CURSOR_STATE_PTYPE        0x3006
+#define APOLLO_CURSOR_MODE_PTYPE         0x3007
+#define APOLLO_CURSOR_READY_PTYPE        0x3008
+
+static struct {
+    uint32_t serial;
+    uint16_t width;
+    uint16_t height;
+    uint16_t hotspotX;
+    uint16_t hotspotY;
+    uint32_t totalSize;
+    uint32_t received;
+    uint8_t* data;
+} dynamicCursorShape;
+
 static int intervalGoodFrameCount;
 static int intervalTotalFrameCount;
 static uint64_t intervalStartTimeMs;
@@ -321,6 +339,8 @@ static bool supportsIdrFrameRequest;
 // Initializes the control stream
 int initializeControlStream(void) {
     stopping = false;
+    free(dynamicCursorShape.data);
+    memset(&dynamicCursorShape, 0, sizeof(dynamicCursorShape));
     PltCreateEvent(&idrFrameRequiredEvent);
     LbqInitializeLinkedBlockingQueue(&invalidReferenceFrameTuples, 20);
     LbqInitializeLinkedBlockingQueue(&frameFecStatusQueue, 8); // Limits number of frame status reports per periodic ping interval
@@ -402,6 +422,8 @@ void destroyControlStream(void) {
     freeBasicLbqList(LbqDestroyLinkedBlockingQueue(&asyncCallbackQueue));
 
     PltDeleteMutex(&enetMutex);
+    free(dynamicCursorShape.data);
+    memset(&dynamicCursorShape, 0, sizeof(dynamicCursorShape));
 }
 
 static void queueFrameInvalidationTuple(uint32_t startFrame, uint32_t endFrame) {
@@ -1029,6 +1051,118 @@ static bool needsAsyncCallback(unsigned short packetType) {
            packetType == packetTypes[IDX_DS_ADAPTIVE_TRIGGERS];
 }
 
+static uint16_t readCursorLe16(const uint8_t* p) {
+    uint16_t value;
+    memcpy(&value, p, sizeof(value));
+    return LE16(value);
+}
+
+static uint32_t readCursorLe32(const uint8_t* p) {
+    uint32_t value;
+    memcpy(&value, p, sizeof(value));
+    return LE32(value);
+}
+
+static bool handleDynamicCursorPacket(PNVCTL_ENET_PACKET_HEADER_V1 ctlHdr, int packetLength) {
+    const uint8_t* payload = (const uint8_t*)(ctlHdr + 1);
+    const int payloadLength = packetLength - sizeof(*ctlHdr);
+
+    if (ctlHdr->type == APOLLO_CURSOR_OFFER_PTYPE) {
+        if (payloadLength >= 8) {
+            ListenerCallbacks.dynamicCursorOffer(payload[0], payload[1],
+                                                 readCursorLe16(payload + 2),
+                                                 readCursorLe16(payload + 4),
+                                                 readCursorLe16(payload + 6));
+        }
+        return true;
+    }
+
+    if (ctlHdr->type == APOLLO_CURSOR_SHAPE_PTYPE) {
+        if (payloadLength < 24) {
+            return true;
+        }
+
+        const uint32_t serial = readCursorLe32(payload);
+        const uint16_t width = readCursorLe16(payload + 4);
+        const uint16_t height = readCursorLe16(payload + 6);
+        const uint16_t hotspotX = readCursorLe16(payload + 8);
+        const uint16_t hotspotY = readCursorLe16(payload + 10);
+        const uint32_t totalSize = readCursorLe32(payload + 12);
+        const uint32_t offset = readCursorLe32(payload + 16);
+        const uint16_t chunkSize = readCursorLe16(payload + 20);
+        const uint8_t format = payload[22];
+
+        if (format != 1 || width == 0 || height == 0 || width > 256 || height > 256 ||
+            totalSize != (uint32_t)width * height * 4 ||
+            chunkSize > payloadLength - 24 || offset > totalSize ||
+            chunkSize > totalSize - offset) {
+            return true;
+        }
+
+        if (offset == 0) {
+            free(dynamicCursorShape.data);
+            memset(&dynamicCursorShape, 0, sizeof(dynamicCursorShape));
+            dynamicCursorShape.data = malloc(totalSize);
+            if (dynamicCursorShape.data == NULL) {
+                return true;
+            }
+            dynamicCursorShape.serial = serial;
+            dynamicCursorShape.width = width;
+            dynamicCursorShape.height = height;
+            dynamicCursorShape.hotspotX = hotspotX;
+            dynamicCursorShape.hotspotY = hotspotY;
+            dynamicCursorShape.totalSize = totalSize;
+        }
+
+        if (dynamicCursorShape.data == NULL ||
+            dynamicCursorShape.serial != serial ||
+            dynamicCursorShape.width != width ||
+            dynamicCursorShape.height != height ||
+            dynamicCursorShape.totalSize != totalSize ||
+            dynamicCursorShape.received != offset) {
+            return true;
+        }
+
+        memcpy(dynamicCursorShape.data + offset, payload + 24, chunkSize);
+        dynamicCursorShape.received += chunkSize;
+        if (dynamicCursorShape.received == dynamicCursorShape.totalSize) {
+            ListenerCallbacks.dynamicCursorShape(
+                dynamicCursorShape.serial,
+                dynamicCursorShape.width,
+                dynamicCursorShape.height,
+                dynamicCursorShape.hotspotX,
+                dynamicCursorShape.hotspotY,
+                dynamicCursorShape.data,
+                dynamicCursorShape.totalSize
+            );
+        }
+        return true;
+    }
+
+    if (ctlHdr->type == APOLLO_CURSOR_STATE_PTYPE) {
+        if (payloadLength >= 18) {
+            ListenerCallbacks.dynamicCursorState(
+                readCursorLe32(payload),
+                (int32_t)readCursorLe32(payload + 4),
+                (int32_t)readCursorLe32(payload + 8),
+                readCursorLe16(payload + 12),
+                readCursorLe16(payload + 14),
+                payload[16] != 0
+            );
+        }
+        return true;
+    }
+
+    if (ctlHdr->type == APOLLO_CURSOR_MODE_PTYPE) {
+        if (payloadLength >= 8) {
+            ListenerCallbacks.dynamicCursorMode(payload[0], readCursorLe32(payload + 4));
+        }
+        return true;
+    }
+
+    return false;
+}
+
 static void queueAsyncCallback(PNVCTL_ENET_PACKET_HEADER_V1 ctlHdr, int packetLength) {
     BYTE_BUFFER bb;
     PQUEUED_ASYNC_CALLBACK queuedCb;
@@ -1292,8 +1426,12 @@ static void controlReceiveThreadFunc(void* context) {
                 hdrEnabled = (enableByte != 0);
             }
 
+            if (handleDynamicCursorPacket(ctlHdr, packetLength)) {
+                // Dynamic cursor callbacks are lightweight and the JNI bridge
+                // copies shape data before this receive buffer is released.
+            }
             // Process client callbacks in a separate thread
-            if (needsAsyncCallback(ctlHdr->type)) {
+            else if (needsAsyncCallback(ctlHdr->type)) {
                 queueAsyncCallback(ctlHdr, packetLength);
             }
             else if (ctlHdr->type == packetTypes[IDX_TERMINATION]) {
@@ -2048,6 +2186,46 @@ bool LiGetHdrMetadata(PSS_HDR_METADATA metadata) {
 
     *metadata = hdrMetadata;
     return true;
+}
+
+int LiSendDynamicCursorCapabilities(uint8_t version, uint8_t formats,
+                                    uint16_t maxWidth, uint16_t maxHeight, uint16_t flags) {
+    uint8_t payload[8] = {
+        version,
+        formats,
+        (uint8_t)maxWidth,
+        (uint8_t)(maxWidth >> 8),
+        (uint8_t)maxHeight,
+        (uint8_t)(maxHeight >> 8),
+        (uint8_t)flags,
+        (uint8_t)(flags >> 8),
+    };
+    return sendMessageAndForget(
+        APOLLO_CURSOR_CAPABILITIES_PTYPE,
+        sizeof(payload),
+        payload,
+        CTRL_CHANNEL_SERVERCTL,
+        ENET_PACKET_FLAG_RELIABLE,
+        false
+    );
+}
+
+int LiSendDynamicCursorReady(uint32_t shapeSerial, uint8_t version) {
+    uint8_t payload[5] = {
+        (uint8_t)shapeSerial,
+        (uint8_t)(shapeSerial >> 8),
+        (uint8_t)(shapeSerial >> 16),
+        (uint8_t)(shapeSerial >> 24),
+        version,
+    };
+    return sendMessageAndForget(
+        APOLLO_CURSOR_READY_PTYPE,
+        sizeof(payload),
+        payload,
+        CTRL_CHANNEL_SERVERCTL,
+        ENET_PACKET_FLAG_RELIABLE,
+        false
+    );
 }
 
 // Send a server cmd request to the streaming machine
